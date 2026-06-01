@@ -5,9 +5,10 @@ import plotly.express as px
 from datetime import datetime
 import time
 import os
+import re
 import yfinance as yf
 from rag_engine import InvestmentRAGEngine
-from news_engine import get_samsung_news
+from news_engine import get_samsung_news, analyze_sentiment
 
 # streamlit run app.py
 # --- Page Config ---
@@ -85,124 +86,116 @@ st.markdown("""
     .badge-warning { background-color: #fff9db; color: #856404; padding: 2px 8px; border-radius: 4px; font-weight: bold; }
     .badge-danger { background-color: #ffe3e3; color: #cf222e; padding: 2px 8px; border-radius: 4px; font-weight: bold; }
     
-    /* 뉴스 카드 스타일 */
+    /* 뉴스 그리드 레이아웃 */
+    .news-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(450px, 1fr));
+        gap: 15px;
+        margin-top: 15px;
+    }
     .news-card {
         background-color: #ffffff;
         border: 1px solid #e0e0e0;
-        padding: 15px;
+        padding: 18px;
         border-radius: 8px;
-        margin-bottom: 10px;
-        transition: transform 0.2s;
+        transition: transform 0.2s, box-shadow 0.2s;
+        display: flex;
+        flex-direction: column;
+        justify-content: space-between;
+        height: 100%;
     }
     .news-card:hover {
         transform: translateY(-2px);
-        box-shadow: 0 4px 6px rgba(0,0,0,0.05);
+        box-shadow: 0 4px 12px rgba(0,0,0,0.08);
     }
-    .news-title {
-        font-weight: bold;
+    .news-press-badge {
+        background-color: #f1f3f4;
+        color: #5f6368;
+        padding: 2px 8px;
+        border-radius: 4px;
+        font-size: 0.75em;
+        font-weight: 600;
+        display: inline-block;
+        margin-bottom: 8px;
+    }
+    .news-title:hover {
+        text-decoration: underline;
         color: #1a73e8;
-        text-decoration: none;
-        font-size: 1.1em;
     }
-    .news-meta {
-        color: #70757a;
-        font-size: 0.85em;
-        margin-bottom: 5px;
+    .news-summary {
+        font-size: 0.88em;
+        color: #3c4043;
+        line-height: 1.5;
+        margin-top: 8px;
+        display: -webkit-box;
+        -webkit-line-clamp: 3;
+        -webkit-box-orient: vertical;
+        overflow: hidden;
     }
     
-    /* 투자 전략 스타일 */
-    .strategy-container {
-        background-color: #f8f9fa;
+    /* 투자 전략 스타일 개선 (이모티콘 제거) */
+    .strategy-grid {
+        display: flex;
+        flex-direction: column;
+        gap: 15px;
+        margin-top: 15px;
+    }
+    .strategy-card {
+        background-color: #ffffff;
+        border: 1px solid #e0e0e0;
         border-left: 5px solid #2ecc71;
         padding: 20px;
-        border-radius: 0 8px 8px 0;
-        margin-top: 20px;
+        border-radius: 8px;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.02);
     }
-    .strategy-item {
-        margin-bottom: 15px;
+    .strategy-card.short-term { border-left-color: #3498db; }
+    .strategy-card.mid-term { border-left-color: #2ecc71; }
+    .strategy-card.long-term { border-left-color: #9b59b6; }
+    
+    .strategy-header {
+        display: flex;
+        align-items: center;
+        margin-bottom: 10px;
+        font-weight: 800;
+        font-size: 1.1em;
+        color: #202124;
     }
-    .strategy-label {
-        font-weight: bold;
-        color: #2c3e50;
-        display: block;
-        margin-bottom: 5px;
+    .strategy-content {
+        color: #4a4a4a;
+        line-height: 1.6;
+        font-size: 0.95em;
+    }
+
+    /* 채팅 스타일 커스텀 */
+    .stChatFloatingInputContainer {
+        bottom: 20px;
     }
 </style>
 """, unsafe_allow_html=True)
 
 # --- Data Fetching ---
-@st.cache_data(ttl=3600)
+@st.cache_data(ttl=600)
 def fetch_news_and_strategy():
     # 1. PDF 보고서에서 핵심 키워드 추출
     report_keywords = rag_engine.get_report_keywords() if rag_engine else []
     
-    # 2. 키워드 기반 뉴스 필터링 (보고서 관련 내용 위주)
-    news = get_samsung_news(limit=5, keywords=report_keywords) # 분석을 위해 5개 수집
+    # 2. 키워드 기반 뉴스 필터링
+    news = get_samsung_news(limit=6, keywords=report_keywords)
     
-    # 3. 만약 키워드 필터링 결과가 너무 적으면 일반 뉴스로 보완
-    if len(news) < 3:
-        extra_news = get_samsung_news(limit=5)
+    if len(news) < 4:
+        extra_news = get_samsung_news(limit=6)
         for n in extra_news:
             if n['title'] not in [exist['title'] for exist in news]:
                 news.append(n)
-            if len(news) >= 5: break
+            if len(news) >= 6: break
 
+    # 3. 심리 분석 (LLM 사용)
+    sentiment = analyze_sentiment(news[:5], rag_engine.llm) if rag_engine else {"긍정": 33, "중립": 34, "부정": 33}
+    
+    # 4. 투자 전략 생성
     strategy = rag_engine.get_investment_strategy(news[:3]) if rag_engine else "엔진이 로드되지 않았습니다."
-    return news, strategy
-
-def calculate_sentiment(news_list):
-    """
-    뉴스 제목의 키워드를 분석하여 간단한 감성 점수를 도출합니다.
-    """
-    pos_words = ["상승", "돌파", "성공", "수주", "실적발표", "최고", "확대", "성장", "강세", "긍정"]
-    neg_words = ["하락", "감소", "우려", "부진", "위기", "둔화", "최저", "축소", "약세", "부정"]
     
-    pos_count = 0
-    neg_count = 0
-    
-    for n in news_list:
-        title = n['title']
-        pos_count += sum(1 for word in pos_words if word in title)
-        neg_count += sum(1 for word in neg_words if word in title)
-    
-    total = pos_count + neg_count
-    if total == 0:
-        return 50, 30, 20 # 기본값 (중립 위주)
-    
-    pos_ratio = int((pos_count / total) * 100)
-    neg_ratio = int((neg_count / total) * 100)
-    neu_ratio = 100 - pos_ratio - neg_ratio
-    
-    # 너무 극단적인 경우 보정
-    if pos_ratio > 80: pos_ratio, neu_ratio = 80, 10
-    if neg_ratio > 80: neg_ratio, neu_ratio = 80, 10
-    
-    return pos_ratio, neu_ratio, neg_ratio
-
-def calculate_trend_score(df):
-    """
-    주가 데이터를 기반으로 최근 시장 동향 점수를 산출합니다.
-    """
-    # 최근 10일 데이터
-    recent = df.tail(10).copy()
-    
-    # 1. 이동평균선 대비 위치 (MA20 위면 가점)
-    ma_signal = 1 if recent['Close'].iloc[-1] > recent['MA20'].iloc[-1] else 0
-    
-    # 2. 최근 5일 수익률
-    return_5d = (recent['Close'].iloc[-1] - recent['Close'].iloc[-5]) / recent['Close'].iloc[-5]
-    
-    # 3. 변동성 및 추세 결합 (0~100점 사이 산출)
-    base_score = 70 # 기본 점수
-    trend_adj = (return_5d * 500) + (ma_signal * 10)
-    
-    # 날짜별 점수 생성 (시각화용)
-    scores = []
-    for i in range(len(recent)):
-        daily_score = base_score + (i * 1.5) + (trend_adj if i > 5 else 0)
-        scores.append(min(max(daily_score, 10), 98)) # 10~98점 사이 제한
-        
-    return pd.DataFrame({"Date": recent.index, "Score": scores})
+    return news, strategy, sentiment
 
 @st.cache_data(ttl=3600)
 def fetch_stock_data():
@@ -213,7 +206,6 @@ def fetch_stock_data():
     df['MA60'] = df['Close'].rolling(window=60).mean()
     
     info = stock.info
-    # yfinance 정보가 불확실할 경우 최근 주가 기반으로 PER 추정 또는 기본값
     metrics = {
         "CurrentPrice": info.get("currentPrice", df['Close'].iloc[-1] if not df.empty else 0),
         "PER": info.get("trailingPE") or 15.0,
@@ -233,7 +225,7 @@ def create_stock_chart(df):
     fig.update_layout(
         title="삼성전자 주가 추이 (최근 6개월)",
         yaxis_title="가격 (원)",
-        yaxis=dict(tickformat=",.0f"), # 천 단위 콤마 추가
+        yaxis=dict(tickformat=",.0f"),
         xaxis_rangeslider_visible=False,
         height=400,
         margin=dict(l=0, r=0, t=40, b=0),
@@ -259,6 +251,9 @@ def create_gauge_chart(value, title, min_val, max_val):
     fig.update_layout(height=200, margin=dict(l=20, r=20, t=50, b=20))
     return fig
 
+# 데이터 로드
+news_data, strategy_text, sentiment_ratios = fetch_news_and_strategy()
+
 # --- Sidebar: Dashboard ---
 with st.sidebar:
     st.header("📊 실시간 대시보드")
@@ -280,19 +275,19 @@ with st.sidebar:
             st.plotly_chart(create_gauge_chart(metrics["PBR"], "", 0, 3), width="stretch")
             
         st.subheader("시장 심리 (Sentiment)")
-        sentiment_data = pd.DataFrame({
+        sentiment_df = pd.DataFrame({
             "Sentiment": ["긍정", "중립", "부정"],
-            "Ratio": [65, 20, 15]
+            "Ratio": [sentiment_ratios["긍정"], sentiment_ratios["중립"], sentiment_ratios["부정"]]
         })
-        fig_donut = px.pie(sentiment_data, values='Ratio', names='Sentiment', hole=.4,
+        fig_donut = px.pie(sentiment_df, values='Ratio', names='Sentiment', hole=.4,
                      color_discrete_sequence=['#2ecc71', '#95a5a6', '#e74c3c'])
         fig_donut.update_layout(showlegend=False, height=250, margin=dict(l=0, r=0, t=0, b=0))
         st.plotly_chart(fig_donut, width="stretch")
         
         st.subheader("시장 동향 점수")
         trend_data = pd.DataFrame({
-            "Date": pd.date_range(start="2026-05-01", periods=10),
-            "Score": [70, 72, 68, 75, 80, 78, 82, 85, 83, 88]
+            "Date": pd.date_range(end=datetime.now(), periods=10),
+            "Score": [70, 72, 68, 75, 80, 78, 82, 85, 83, 88] # 예시 데이터
         })
         fig_line = px.line(trend_data, x="Date", y="Score")
         fig_line.update_layout(height=200, margin=dict(l=0, r=0, t=0, b=0))
@@ -309,84 +304,97 @@ if 'stock_df' in locals():
     st.plotly_chart(create_stock_chart(stock_df), width="stretch")
     st.markdown("<br>", unsafe_allow_html=True)
 
+# 2. AI 채팅 영역 (고정 높이 컨테이너)
+st.subheader("💬 AI 분석 채팅")
+chat_container = st.container(height=500, border=True)
+
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
-# Display chat messages
-for message in st.session_state.messages:
-    with st.chat_message(message["role"]):
-        st.markdown(f'<div class="notion-text">{message["content"]}</div>', unsafe_allow_html=True)
-        if "sources" in message:
-            with st.expander("📚 출처 확인하기 (Source Accordion)"):
-                for source in message["sources"]:
-                    st.markdown(f"- [{source['title']}]({source['link']})")
+# Display chat messages inside the scrollable container
+with chat_container:
+    for message in st.session_state.messages:
+        with st.chat_message(message["role"]):
+            st.markdown(f'<div class="notion-text">{message["content"]}</div>', unsafe_allow_html=True)
+            if "sources" in message:
+                with st.expander("📚 출처 확인하기"):
+                    for source in message["sources"]:
+                        st.markdown(f"- [{source['title']}]({source['link']})")
 
 # User Input
 if prompt := st.chat_input("삼성전자의 최근 배당 정책에 대해 알려줘"):
     st.session_state.messages.append({"role": "user", "content": prompt})
-    with st.chat_message("user"):
-        st.markdown(prompt)
+    
+    with chat_container:
+        with st.chat_message("user"):
+            st.markdown(prompt)
 
-    with st.chat_message("assistant"):
-        message_placeholder = st.empty()
-        
-        # Self-RAG Process Visualization
-        status_text = st.status("🔍 정보를 분석 중입니다...", expanded=True)
-        time.sleep(0.5)
-        status_text.write("1. 관련 문서 검색 중 (Knowledge Base: 삼성전자 보고서)")
-        
-        if rag_engine:
-            # 대화 기록 전달 (최대 3쌍/6개 메시지)
-            response_text, sources = rag_engine.process_query(prompt, chat_history=st.session_state.messages[-6:])
-            status_text.write("2. 답변 생성 및 자가 검증 중 (Gemini Self-Reflection)")
-            time.sleep(0.5)
-            status_text.update(label="✅ 분석 완료!", state="complete", expanded=False)
+        with st.chat_message("assistant"):
+            status_text = st.status("🔍 정보를 분석 중입니다...", expanded=True)
             
-            # Display response
-            message_placeholder.markdown(f'<div class="notion-text">{response_text}</div>', unsafe_allow_html=True)
-            
-            # Display sources
-            if sources:
-                with st.expander("📚 출처 확인하기 (Source Accordion)"):
-                    for src in sources:
-                        filename = os.path.basename(src['title'])
-                        st.markdown(f"- **{filename}** (p.{src['page']})")
-            
-            st.session_state.messages.append({
-                "role": "assistant", 
-                "content": response_text,
-                "sources": [{"title": os.path.basename(s['title']), "link": "#"} for s in sources]
-            })
-        else:
-            status_text.update(label="❌ RAG 엔진 미로드", state="error", expanded=True)
-            st.error("RAG 엔진이 설정되지 않았습니다. API 키와 파일 경로를 확인해주세요.")
+            if rag_engine:
+                # 대화 기록 전달
+                response_text, sources, contexts = rag_engine.process_query(prompt, chat_history=st.session_state.messages[-6:])
+                status_text.update(label="✅ 분석 완료!", state="complete", expanded=False)
+                
+                st.markdown(f'<div class="notion-text">{response_text}</div>', unsafe_allow_html=True)
+                
+                # 출처 표시
+                if sources:
+                    with st.expander("📚 출처 확인하기"):
+                        for src in sources:
+                            filename = os.path.basename(src['title'])
+                            st.markdown(f"- **{filename}** (p.{src['page']})")
+                
+                st.session_state.messages.append({
+                    "role": "assistant", 
+                    "content": response_text,
+                    "sources": [{"title": os.path.basename(s['title']), "link": "#"} for s in sources]
+                })
+                st.rerun()
+            else:
+                st.error("RAG 엔진이 로드되지 않았습니다.")
 
 # --- Bottom Section: News & Investment Strategy ---
 st.markdown("---")
 
-news_data, strategy_text = fetch_news_and_strategy()
-
-# 1. 최근 주요 뉴스 (상단)
-st.subheader("📰 최근 주요 뉴스")
+# 1. 최근 주요 뉴스 (그리드 레이아웃)
+st.subheader("최근 주요 뉴스")
+news_html = '<div class="news-grid">'
 for item in news_data:
-    st.markdown(f"""
-    <div class="news-card">
-        <div class="news-meta">{item['press']}</div>
-        <a href="{item['link']}" target="_blank" style="text-decoration: none;">
-            <div class="news-title">{item['title']}</div>
-        </a>
-        <div class="notion-text" style="font-size: 0.9em; margin-top: 5px;">{item['summary']}</div>
-    </div>
-    """, unsafe_allow_html=True)
+    press = item.get('press', '구글 뉴스')
+    link = item.get('link', '#')
+    title = item.get('title', '제목 없음')
+    card = f'<div class="news-card"><div><div class="news-press-badge">{press}</div><a href="{link}" target="_blank" class="news-title">{title}</a></div></div>'
+    news_html += card
+news_html += '</div>'
+st.markdown(news_html.replace('\n', ''), unsafe_allow_html=True)
 
 st.markdown("<br>", unsafe_allow_html=True)
 
-# 2. AI 추천 투자 전략 (하단)
-st.subheader("💡 AI 추천 투자 전략")
-# 전략 텍스트 포맷팅 (개행 및 강조)
-formatted_strategy = strategy_text.replace("1.", "### 1.").replace("2.", "### 2.").replace("3.", "### 3.")
-st.markdown(f"""
-<div class="strategy-container">
-    <div class="notion-text">{formatted_strategy}</div>
-</div>
-""", unsafe_allow_html=True)
+# 2. AI 추천 투자 전략 (카드 레이아웃)
+st.subheader("AI 추천 투자 전략")
+
+# 전략 텍스트 파싱 및 렌더링 로직
+import re
+strategies = re.split(r'\n?\d\.\s', strategy_text)
+strategies = [s.strip() for s in strategies if s.strip()]
+
+strategy_html = '<div class="strategy-grid">'
+classes = ["short-term", "mid-term", "long-term"]
+
+for i, strategy in enumerate(strategies):
+    if i >= 3: break
+    
+    parts = strategy.split(":", 1)
+    if len(parts) == 2:
+        title = parts[0].strip()
+        content = parts[1].strip()
+    else:
+        title = f"전략 {i+1}"
+        content = strategy
+    
+    card = f'<div class="strategy-card {classes[i]}"><div class="strategy-header">{title}</div><div class="strategy-content">{content}</div></div>'
+    strategy_html += card
+strategy_html += '</div>'
+st.markdown(strategy_html.replace('\n', ''), unsafe_allow_html=True)

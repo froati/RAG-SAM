@@ -82,7 +82,8 @@ class InvestmentRAGEngine:
             return "분석할 문서가 없습니다.", []
 
         # 2. Retrieve
-        docs = self.vector_db.similarity_search(query, k=5)
+        # 정보량을 확보하기 위해 검색 개수(k)를 7개로 확대 (유사도 검색 유지)
+        docs = self.vector_db.similarity_search(query, k=7)
         context = "\n".join([f"[문서 {i+1}] {doc.page_content}" for i, doc in enumerate(docs)])
         
         # 3. 특정 질문(주가 변동성) 처리 로직 및 프롬프트 구성
@@ -96,14 +97,15 @@ class InvestmentRAGEngine:
                 history_text += f"{role}: {msg['content']}\n"
 
         prompt_template = """
-        당신은 삼성전자 투자 전문 비서입니다. 제공된 [컨텍스트]와 필요 시 [이전 대화 기록]을 바탕으로 답변하세요.
+        당신은 삼성전자 투자 전문 비서입니다. 제공된 [컨텍스트]와 [이전 대화 기록]을 바탕으로 답변하세요.
         
         {history_section}
         
         [지시사항]
-        - 만약 사용자가 '주가 변동성'에 대해 물었다면, 이전 대화 맥락에서 언급된 사업적 이슈(예: 실적, 신제품, 계약 등)가 실제 삼성전자의 주가 변동성이나 투자 심리에 어떤 영향을 줄 수 있는지 분석하여 답변하세요.
-        - 답변은 상세하고 전문적이어야 하며, 수치 데이터가 있다면 적극 활용하세요.
-        - '💡 관련 투자 정보' 섹션을 포함하여 풍부한 정보를 제공하세요.
+        1. 답변은 반드시 [컨텍스트]에 기반해야 합니다. 다만, 질문에 대한 직접적인 문장이 없더라도 본문의 수치나 정보를 조합하여 논리적으로 답변할 수 있다면 분석하여 설명하세요.
+        2. 수치 데이터는 원문의 내용을 정확히 반영하되, 필요 시 연산(합계, 차이 등)을 통해 사용자에게 유용한 정보를 제공하세요.
+        3. [컨텍스트]에서 도저히 근거를 찾을 수 없는 경우에만 "제공된 문서에서 관련 정보를 찾을 수 없습니다."라고 답변하세요.
+        4. '💡 관련 투자 정보' 섹션을 포함하여 풍부한 분석을 제공하되, 본문의 맥락을 벗어나지 않도록 주의하세요.
         
         질문: {query}
         [컨텍스트]
@@ -121,8 +123,9 @@ class InvestmentRAGEngine:
         })
         
         sources = [{"title": doc.metadata.get('source', '알 수 없음'), "page": doc.metadata.get('page', 0)} for doc in docs]
+        contexts = [doc.page_content for doc in docs]
         
-        return response.content, sources
+        return response.content, sources, contexts
 
     def get_report_keywords(self):
         """
