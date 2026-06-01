@@ -1,0 +1,16 @@
+streamlit
+pandas
+plotly
+langchain
+langchain-community
+langchain-openai
+faiss-cpu
+pypdf
+python-dotenv
+requests
+beautifulsoup4
+yfinance
+lxml
+ragas
+datasets
+matplotlib

@@ -1,0 +1,23 @@
+# 가상환경
+venv/
+.venv/
+
+# 설정 및 비밀키 (절대 올리면 안 됨! GitHub 업로드 제외)
+.env
+
+# Python 캐시
+__pycache__/
+*.py[cod]
+
+# 로컬 설정
+.vscode/
+
+
+# 시스템 파일
+.DS_Store
+Thumbs.db
+
+# 로컬 벡터 DB 및 데이터
+faiss_index/
+data/*.pdf
+!data/.gitkeep
