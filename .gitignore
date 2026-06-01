@@ -18,6 +18,4 @@ __pycache__/
 Thumbs.db
 
 # 로컬 벡터 DB 및 데이터
-faiss_index/
-data/*.pdf
 !data/.gitkeep
