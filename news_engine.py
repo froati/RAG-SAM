@@ -7,13 +7,22 @@ import re
 # XML 파싱 관련 경고 무시
 warnings.filterwarnings("ignore", category=XMLParsedAsHTMLWarning)
 
-def get_samsung_news(limit=5, keywords=None):
+def get_samsung_news(limit=8, keywords=None):
     """
     구글 뉴스 RSS 피드를 사용하여 '삼성전자' 관련 최신 뉴스를 가져옵니다.
-    keywords 인자가 제공되면 해당 키워드 중 하나라도 제목에 포함된 뉴스만 필터링합니다.
+    투자 관련성 필터링 로직이 강화되었습니다.
     """
     query = urllib.parse.quote("삼성전자")
     url = f"https://news.google.com/rss/search?q={query}&hl=ko&gl=KR&ceid=KR:ko"
+    
+    # 투자와 관련된 핵심 키워드 (가중치 부여용)
+    investment_keywords = [
+        "실적", "주가", "반도체", "HBM", "영업이익", "매출", "배당", "인수", "합병", 
+        "신제품", "갤럭시", "파운드리", "공시", "투자", "전망", "목표가", "계약"
+    ]
+    
+    # 제외할 노이즈 키워드
+    blacklist_keywords = ["동호회", "인사발령", "스포츠", "연예", "포토", "게시판", "이벤트"]
     
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
@@ -23,14 +32,10 @@ def get_samsung_news(limit=5, keywords=None):
         response = requests.get(url, headers=headers, timeout=10)
         response.raise_for_status()
         
-        # lxml이 없는 경우를 대비해 html.parser 사용
         soup = BeautifulSoup(response.content, 'html.parser')
-            
         items = soup.find_all('item')
         
-        # 전체 텍스트에서 링크를 찾기 위한 정규식 (html.parser의 한계 극복)
         raw_content = response.text
-        # <item>...</item> 단위로 분리하여 링크 추출
         raw_items = re.findall(r'<item>(.*?)</item>', raw_content, re.DOTALL)
         
         news_list = []
@@ -40,29 +45,29 @@ def get_samsung_news(limit=5, keywords=None):
                 
             title = item.title.text if item.title else "제목 없음"
             
-            # 키워드 필터링 적용
+            # 1. 블랙리스트 필터링 (노이즈 제거)
+            if any(bk in title for bk in blacklist_keywords):
+                continue
+                
+            # 2. 투자 관련성 체크 (투자 키워드가 하나라도 포함되면 우선순위)
+            is_investment_related = any(ik in title for ik in investment_keywords)
+            
+            # 사용자 지정 키워드 필터링이 있는 경우 적용
             if keywords:
-                is_relevant = any(kw.lower() in title.lower() for kw in keywords)
-                if not is_relevant:
+                if not any(kw.lower() in title.lower() for kw in keywords):
                     continue
 
-            # 정규식으로 해당 아이템의 실제 링크 추출 (가장 확실한 방법)
+            # 링크 추출 로직 (기존 유지)
             link = "#"
             if i < len(raw_items):
                 link_match = re.search(r'<link>(.*?)</link>', raw_items[i], re.DOTALL)
                 if link_match:
                     link = link_match.group(1).strip()
             
-            # 정규식 실패 시 BeautifulSoup fallback
             if link == "#" or not link:
                 link_tag = item.find('link')
                 if link_tag:
                     link = link_tag.next_sibling.strip() if link_tag.next_sibling else link_tag.text
-            
-            # 여전히 비어있으면 전체 텍스트 검색
-            if not link or link == "#":
-                link_search = re.search(r'https?://[^\s<>"]+', str(item))
-                if link_search: link = link_search.group(0)
 
             # 언론사 정보 분리
             if " - " in title:
@@ -72,13 +77,12 @@ def get_samsung_news(limit=5, keywords=None):
             else:
                 press = item.source.text if item.source else "구글 뉴스"
             
-            summary = ""
-            
             news_list.append({
                 "title": title,
                 "link": link,
                 "press": press,
-                "summary": summary
+                "summary": "",
+                "is_relevant": is_investment_related
             })
             
         return news_list
@@ -89,7 +93,8 @@ def get_samsung_news(limit=5, keywords=None):
 
 def analyze_sentiment(news_list, llm):
     """
-    뉴스 리스트를 바탕으로 시장 심리(긍정, 중립, 부정) 비율을 분석합니다.
+    뉴스 리스트를 바탕으로 시장 심리를 분석합니다. 
+    투자 무관 뉴스에 대한 무시 로직이 강화된 프롬프트를 사용합니다.
     """
     if not news_list:
         return {"긍정": 33, "중립": 34, "부정": 33}
@@ -97,12 +102,14 @@ def analyze_sentiment(news_list, llm):
     news_titles = "\n".join([f"- {n['title']}" for n in news_list])
     
     prompt = f"""
-    아래 뉴스 제목들을 분석하여 **삼성전자(Samsung Electronics)**의 투자 심리에 미치는 영향만 긍정, 중립, 부정 비율(%)로 응답하세요.
+    아래 삼성전자 관련 뉴스 제목들을 분석하여 투자 심리 비율(%)을 응답하세요.
     
-    **주의사항:**
-    1. 타사(SK하이닉스 등)의 악재나 전망은 삼성전자에게 상대적 호재 또는 중립으로 해석해야 합니다. 
-    2. 반드시 '삼성전자'의 관점에서만 이익과 손해를 따지세요.
-    3. 응답 형식: '긍정: 숫자, 중립: 숫자, 부정: 숫자' (합계 100)
+    **엄격한 분석 지침:**
+    1. **투자 관련성 검증**: 주가, 실적, 산업 동향, 경영 전략과 관련 없는 뉴스(인사발령, 단순 행사, 사회 공헌 등)는 분석에서 제외하거나 '중립'으로 처리하세요.
+    2. **삼성전자 중심 해석**: 타사 소식은 삼성전자의 경쟁 우위나 시장 점유율 관점에서만 해석하세요.
+    3. **수치화**: 오직 투자자에게 실질적인 영향을 줄 소식만 긍정/부정으로 분류하세요. 모호하면 '중립' 비중을 높이세요.
+    
+    응답 형식: '긍정: 숫자, 중립: 숫자, 부정: 숫자' (합계 100)
     
     뉴스 제목:
     {news_titles}
@@ -112,7 +119,6 @@ def analyze_sentiment(news_list, llm):
         response = llm.invoke(prompt)
         content = response.content
         
-        # 숫자만 추출 (간단한 파싱)
         import re
         numbers = re.findall(r'\d+', content)
         if len(numbers) >= 3:
@@ -124,7 +130,7 @@ def analyze_sentiment(news_list, llm):
     except Exception as e:
         print(f"심리 분석 중 오류 발생: {e}")
     
-    return {"긍정": 0, "중립": 100, "부정": 0} # 오류 시 기본값: 중립 100%
+    return {"긍정": 0, "중립": 100, "부정": 0}
 
 if __name__ == "__main__":
     import sys
@@ -136,6 +142,6 @@ if __name__ == "__main__":
     if not news:
         print("뉴스를 가져오지 못했습니다.")
     for n in news:
-        print(f"[{n['press']}] {n['title']}")
+        print(f"[{n['press']}] {n['title']} (투자관련: {n['is_relevant']})")
         print(f"링크: {n['link']}")
         print("-" * 30)
