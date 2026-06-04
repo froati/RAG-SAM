@@ -17,6 +17,7 @@ pydantic
 
 # --- RAG & Search ---
 faiss-cpu
+pymupdf
 pypdf
 langchain-text-splitters
 beautifulsoup4
