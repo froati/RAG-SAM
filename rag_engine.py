@@ -45,7 +45,7 @@ class InvestmentRAGEngine:
                     allow_dangerous_deserialization=True
                 )
             except Exception as e:
-                print(f"⚠️ 인덱스 로드 실패 ({e}). 인덱스를 다시 생성합니다.")
+                print(f"인덱스 로드 실패 ({e}). 인덱스를 다시 생성합니다.")
 
         # 2. 저장된 인덱스가 없거나 로드 실패 시 PDF 파싱 및 생성
         print("새로운 인덱스 생성 중 (고도화된 PDF 분석)...")
