@@ -178,23 +178,34 @@ def fetch_news_and_strategy():
     # 1. PDF 보고서에서 핵심 키워드 추출
     report_keywords = rag_engine.get_report_keywords() if rag_engine else []
     
-    # 2. 키워드 기반 뉴스 필터링
+    # 2. 키워드 기반 뉴스 필터링 (최대 6개)
     news = get_samsung_news(limit=6, keywords=report_keywords)
     
-    if len(news) < 4:
-        extra_news = get_samsung_news(limit=6)
+    # 3. 6개가 안 될 경우, 키워드 없이 추가 수집하여 보충
+    if len(news) < 6:
+        extra_news = get_samsung_news(limit=12) # 넉넉하게 수집
         for n in extra_news:
             if n['title'] not in [exist['title'] for exist in news]:
                 news.append(n)
             if len(news) >= 6: break
+            
+    # 4. 여전히 6개가 안 될 경우 (극단적인 경우), 플레이스홀더로 채움
+    while len(news) < 6:
+        news.append({
+            "title": "추가 뉴스를 불러올 수 없습니다.",
+            "link": "#",
+            "press": "시스템 알림",
+            "summary": "",
+            "is_relevant": False
+        })
 
-    # 3. 심리 분석 (LLM 사용)
+    # 5. 심리 분석 (LLM 사용) - 상위 5개만 활용
     sentiment = analyze_sentiment(news[:5], rag_engine.llm) if rag_engine else {"긍정": 33, "중립": 34, "부정": 33}
     
-    # 4. 투자 전략 생성
+    # 6. 투자 전략 생성 - 상위 3개 뉴스 활용
     strategy = rag_engine.get_investment_strategy(news[:3]) if rag_engine else "엔진이 로드되지 않았습니다."
     
-    return news, strategy, sentiment
+    return news[:6], strategy, sentiment
 
 @st.cache_data(ttl=3600)
 def fetch_stock_data():
@@ -331,8 +342,8 @@ if 'stock_df' in locals() and not stock_df.empty:
     st.markdown("<br>", unsafe_allow_html=True)
 
 # 2. AI 채팅 영역 (고정 높이 컨테이너)
-st.subheader("AI 분석 채팅")
-chat_container = st.container(height=500, border=True)
+st.subheader("AI 분석 비교 (RAG vs 일반 LLM)")
+chat_container = st.container(height=600, border=True)
 
 if "messages" not in st.session_state:
     st.session_state.messages = []
@@ -340,12 +351,24 @@ if "messages" not in st.session_state:
 # Display chat messages inside the scrollable container
 with chat_container:
     for message in st.session_state.messages:
-        with st.chat_message(message["role"]):
-            st.markdown(f'<div class="notion-text">{message["content"]}</div>', unsafe_allow_html=True)
-            if "sources" in message:
-                with st.expander("출처 확인하기"):
-                    for source in message["sources"]:
-                        st.markdown(f"- [{source['title']}]({source['link']})")
+        if message["role"] == "user":
+            with st.chat_message("user"):
+                st.markdown(message["content"])
+        else:
+            # AI 응답은 2단 컬럼으로 표시
+            col_rag, col_llm = st.columns(2)
+            with col_rag:
+                with st.chat_message("assistant", avatar="🤖"):
+                    st.caption("🔍 RAG 기반 분석 (보고서/뉴스)")
+                    st.markdown(f'<div class="notion-text">{message["content"]}</div>', unsafe_allow_html=True)
+                    if "sources" in message:
+                        with st.expander("출처 확인하기"):
+                            for source in message["sources"]:
+                                st.markdown(f"- [{source['title']}]({source['link']})")
+            with col_llm:
+                with st.chat_message("assistant", avatar="🧠"):
+                    st.caption("💡 일반 AI 지식 (GPT)")
+                    st.markdown(f'<div class="notion-text">{message.get("llm_content", "일반 답변이 없습니다.")}</div>', unsafe_allow_html=True)
 
 # User Input
 if prompt := st.chat_input("삼성전자의 최근 배당 정책에 대해 알려줘"):
@@ -355,38 +378,55 @@ if prompt := st.chat_input("삼성전자의 최근 배당 정책에 대해 알�
         with st.chat_message("user"):
             st.markdown(prompt)
 
-        with st.chat_message("assistant"):
-            status_text = st.status("정보를 분석 중입니다...", expanded=True)
-            
-            if rag_engine:
-                # 대화 기록과 뉴스 데이터 전달
-                response_text, sources, contexts = rag_engine.process_query(
-                    prompt, 
-                    chat_history=st.session_state.messages[-6:],
-                    news_list=news_data[:3]  # 상위 3개 뉴스 활용
-                )
-                status_text.update(label="분석 완료!", state="complete", expanded=False)
-                
-                st.markdown(f'<div class="notion-text">{response_text}</div>', unsafe_allow_html=True)
-                
-                # 출처 표시
-                if sources:
-                    with st.expander("출처 확인하기"):
-                        for src in sources:
-                            if src['page'] == "URL":
-                                st.markdown(f"- **{src['title']}**")
-                            else:
-                                filename = os.path.basename(src['title'])
-                                st.markdown(f"- **{filename}** (p.{src['page']})")
-                
-                st.session_state.messages.append({
-                    "role": "assistant", 
-                    "content": response_text,
-                    "sources": [{"title": s['title'], "link": "#"} for s in sources]
-                })
-                st.rerun()
-            else:
-                st.error("RAG 엔진이 로드되지 않았습니다.")
+        # AI 응답 생성
+        col_rag_live, col_llm_live = st.columns(2)
+        
+        with col_rag_live:
+            with st.chat_message("assistant", avatar="🤖"):
+                status_rag = st.status("RAG 분석 중...", expanded=True)
+                if rag_engine:
+                    response_text, sources, contexts = rag_engine.process_query(
+                        prompt, 
+                        chat_history=st.session_state.messages[-6:],
+                        news_list=news_data[:3]
+                    )
+                    status_rag.update(label="RAG 분석 완료", state="complete", expanded=False)
+                    st.markdown(f'<div class="notion-text">{response_text}</div>', unsafe_allow_html=True)
+                    # 출처 표시
+                    if sources:
+                        with st.expander("출처 확인하기"):
+                            for src in sources:
+                                if src['page'] == "URL":
+                                    st.markdown(f"- **{src['title']}**")
+                                else:
+                                    filename = os.path.basename(src['title'])
+                                    st.markdown(f"- **{filename}** (p.{src['page']})")
+                else:
+                    response_text = "RAG 엔진이 로드되지 않았습니다."
+                    sources = []
+                    status_rag.update(label="실패", state="error")
+
+        with col_llm_live:
+            with st.chat_message("assistant", avatar="🧠"):
+                status_llm = st.status("일반 LLM 응답 생성 중...", expanded=True)
+                if rag_engine:
+                    # RAG 없는 순수 LLM 호출
+                    llm_prompt = f"당신은 금융 전문가입니다. 다음 질문에 대해 본인의 일반적인 지식을 바탕으로 답변하세요. 삼성전자와 관련된 최신 뉴스나 보고서 정보가 없어도 아는 선에서 답변하세요.\n\n질문: {prompt}"
+                    llm_response = rag_engine.llm.invoke(llm_prompt).content
+                    status_llm.update(label="LLM 응답 완료", state="complete", expanded=False)
+                    st.markdown(f'<div class="notion-text">{llm_response}</div>', unsafe_allow_html=True)
+                else:
+                    llm_response = "엔진이 없어 답변할 수 없습니다."
+                    status_llm.update(label="실패", state="error")
+
+        # 세션 상태 업데이트
+        st.session_state.messages.append({
+            "role": "assistant", 
+            "content": response_text,
+            "llm_content": llm_response,
+            "sources": [{"title": s['title'], "link": "#"} for s in sources]
+        })
+        st.rerun()
 
 # --- Bottom Section: News & Investment Strategy ---
 st.markdown("---")
