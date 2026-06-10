@@ -71,7 +71,7 @@ class InvestmentRAGEngine:
             self.index_path = index_path
             
         self.embeddings = OpenAIEmbeddings(model="text-embedding-3-small")
-        self.llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.1)
+        self.llm = ChatOpenAI(model="gpt-4o", temperature=0.0)
         
         # Setup retrievers
         self.vector_db, self.bm25_retriever = self._setup_retrievers()
@@ -90,8 +90,8 @@ class InvestmentRAGEngine:
         all_docs = []
         # 금융 특화 청킹: 재무제표 레이아웃 보존 및 수치 연관성을 위한 설정
         text_splitter = RecursiveCharacterTextSplitter(
-            chunk_size=1000,
-            chunk_overlap=300,
+            chunk_size=1500,
+            chunk_overlap=400,
             separators=[
                 "\n\n\n",   # 대단원/페이지 구분
                 "\n\n",     # 문단 구분
@@ -181,6 +181,8 @@ class InvestmentRAGEngine:
             pass
         return [query]
 
+
+
     def process_query(self, query: str, chat_history: List[dict] = None, news_list: List[dict] = None):
         if not self.vector_db or not self.bm25_retriever:
             return "분석할 문서가 없습니다.", [], []
@@ -213,8 +215,8 @@ class InvestmentRAGEngine:
             search_queries.extend(self._expand_query(query))
 
         # 3. Retrieval & Reranking
-        faiss_retriever = self.vector_db.as_retriever(search_kwargs={"k": 15})
-        self.bm25_retriever.k = 15
+        faiss_retriever = self.vector_db.as_retriever(search_kwargs={"k": 20})
+        self.bm25_retriever.k = 20
 
         if EnsembleRetriever:
             ensemble_retriever = EnsembleRetriever(
@@ -239,9 +241,9 @@ class InvestmentRAGEngine:
 
         if self.reranker:
             # Flashrank를 통한 고성능 리랭킹 (Context Precision 향상)
-            docs = self.reranker.compress_documents(unique_docs, query)[:pdf_k]
+            docs = self.reranker.compress_documents(unique_docs, query)[:5]
         else:
-            docs = unique_docs[:pdf_k]
+            docs = unique_docs[:5]
         
         pdf_context = ""
         for doc in docs:
