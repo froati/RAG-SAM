@@ -17,6 +17,7 @@ pydantic
 
 # --- RAG & Search ---
 faiss-cpu
+rank_bm25
 pymupdf
 pypdf
 langchain-text-splitters
