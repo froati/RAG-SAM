@@ -212,8 +212,12 @@ def fetch_stock_data():
         # 2. 지표 데이터 가져오기 (Rate Limit이 자주 발생하는 부분)
         try:
             info = stock.info
+            current_price = info.get("currentPrice")
+            if current_price is None and not df.empty:
+                current_price = df['Close'].iloc[-1]
+            
             metrics = {
-                "CurrentPrice": info.get("currentPrice") or df['Close'].iloc[-1],
+                "CurrentPrice": current_price or 0,
                 "PER": info.get("trailingPE") or 15.0,
                 "PBR": info.get("priceToBook") or 1.2,
                 "ROE": (info.get("returnOnEquity") or 0.12) * 100,
@@ -222,7 +226,7 @@ def fetch_stock_data():
         except Exception:
             # info 호출 실패 시 최소한의 데이터만 유지
             metrics = {
-                "CurrentPrice": df['Close'].iloc[-1],
+                "CurrentPrice": df['Close'].iloc[-1] if not df.empty else 0,
                 "PER": 15.0, "PBR": 1.2, "ROE": 12.0, "DividendYield": 2.0
             }
         return df, metrics
@@ -280,9 +284,12 @@ with st.sidebar:
     try:
         stock_df, metrics = fetch_stock_data()
         
-        diff = stock_df['Close'].iloc[-1] - stock_df['Close'].iloc[-2]
-        pct = (diff / stock_df['Close'].iloc[-2]) * 100
-        st.metric("현재가", f"{int(metrics['CurrentPrice']):,}원", f"{pct:.2f}%")
+        if not stock_df.empty:
+            diff = stock_df['Close'].iloc[-1] - stock_df['Close'].iloc[-2]
+            pct = (diff / stock_df['Close'].iloc[-2]) * 100
+            st.metric("현재가", f"{int(metrics['CurrentPrice']):,}원", f"{pct:.2f}%")
+        else:
+            st.metric("현재가", f"{int(metrics['CurrentPrice']):,}원", "데이터 없음")
         
         st.subheader("재무 건전성")
         col1, col2 = st.columns(2)
@@ -319,7 +326,7 @@ st.title("삼성전자 AI 투자 비서")
 st.markdown("---")
 
 # 실시간 주가 차트 표시
-if 'stock_df' in locals():
+if 'stock_df' in locals() and not stock_df.empty:
     st.plotly_chart(create_stock_chart(stock_df), width="stretch")
     st.markdown("<br>", unsafe_allow_html=True)
 
